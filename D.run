@@ -1,0 +1,25 @@
+## solving D problem : max{y^t*b | y^t*A <= c}
+
+model D.mod;
+data "Inst_2.dat";
+option solver cplex;
+
+solve;
+display g,y;
+# constraints_D, constraints_D.slack;
+
+## retrieval of the primal solution using the complementary conditions (KKT)
+# in the general case we will use the generalize inverse G so that: A*G*A=A and take b = G*A
+# G has row-rank less than or equal to the number of non-negative values of y*
+
+#param G{J,I};
+param y_{I};
+for{i in I}{
+	let y_[i] := y[i];
+}
+
+# we will note as u the solution of P (the primal) gathered from D (the dual)
+ 
+model primal_sol.mod;
+solve;
+display x;

@@ -1,0 +1,180 @@
+## solving many instances and calculating the error
+
+param version := 1; # version of this file
+
+## auxiliary variables to generate random instances of dimension...
+# ...dim_min + (d-1)*dim_step for d in {1,...,dim_num}
+param dim_min := 2;
+param dim_step := 2;
+param dim_num := 5;
+param dim_max := dim_min + (dim_num-1)*dim_step;
+set dims := dim_min..dim_max by 2;
+
+param N_Inst := 1; # number of instances per dimension
+
+model sets_and_parameters.mod;
+model P_.mod;			# primal model
+model D_.mod;			# dual model
+model kkt.mod;			# complementary slackness (as an LP model)
+
+param x_opt_P{J};
+param x_opt_TP{J};
+param x_opt_TD{J};
+param y_{I};			# auxiliary parameter for the values of y in TD model 
+param solve_result_TD_1 default 1;  # -1,0,1 : infeasible, feasible and bounded, unbounded
+
+param error_P;
+param error_TP;
+param error_TD;
+param aux default 0; 	# auxiliary parameter for the calculations
+
+for{dim in dims}{
+	for{instance in 1..N_Inst}{
+	
+		display dim, instance;
+		
+		## solving P problem : min{c*x | A*x = b AND x >= 0}
+		printf "\nsolving P.\n";
+		data ("Inst_" & dim & "_" & instance & ".dat");
+		
+		## initializing x_opt_P, x_opt_TP and x_opt_TD in case of unboundedness
+		for{j in J}{
+			let x_opt_P[j] := Infinity;
+			let x_opt_TP[j] := Infinity;
+			let x_opt_TD[j] := Infinity;
+		}
+		
+		## initializing error_P, error_TP and error_TP to the best scenario (=0)
+		let error_P := 0;
+		let error_TP := 0;
+		let error_TD := 0;
+		
+		option solver cplex;
+		
+		#unfix {i in I} y[i];
+		#restore {j in J} constraints_D[j];
+		
+		# fixing the variables and constraints of the models D.mod and kkt.mod
+		unfix {j in J} x[j];
+		restore {j in J} constraints_P[j];
+		
+		fix {i in I} y[i];
+		drop {j in J} constraints_D[j];
+		fix {j in J} x_[j];
+		drop complementary_slackness_primal;
+		drop complementary_slackness_dual;
+		drop {i in I} feasibility_primal[i];
+		
+		# defining the objective function of the model P.mod
+		objective f;
+		solve;
+		display solve_result;
+		
+		for{j in J}{
+			if solve_result <> "unbounded" then { 
+				if solve_result <> "infeasible" then {
+					let x_opt_P[j] := x[j];
+				}
+				else let x_opt_P[j] := -1;
+			}
+		}
+		
+		reset data n,m,k,I,J,K,c,A,b,T,G;
+		
+		## solving TP problem : min{c*x | (T*A)*x = (T*b) AND x >= 0}
+		printf "\nsolving TP.\n";
+		
+		data ("Inst_proj_" & dim & "_" & instance & ".dat");
+		option solver cplex;
+		solve;
+		display solve_result;
+		
+		for{j in J}{
+			if solve_result <> "unbounded" then { 
+				if solve_result <> "infeasible" then {
+					let x_opt_TP[j] := x[j];
+				}
+				else let x_opt_TP[j] := -1;
+			}
+		}
+		
+		## solving TD problem. ##
+		printf "\nsolving TD.\n";
+		
+		# fixing the variables and constraints of the models P.mod and 
+		# unfixing those of D.mod
+		fix {j in J} x[j];
+		drop {i in I} constraints_P;
+		unfix {i in I: i <= k} y[i];
+		restore {j in J} constraints_D[j];
+		
+		# defining the objective function of the model D.mod
+		objective g;
+		solve;
+		#display solve_result;
+		if solve_result = "unbounded" then {
+			let solve_result_TD_1 := 1;
+		}
+		else {
+			if solve_result = "infeasible" then {
+				let solve_result_TD_1 := -1;
+			}
+		}
+		
+		
+		# saving the intermediate results (y from a dual projected model)...
+		# ...in x_opt_TD (k << n,m)
+		for{j in K}{
+			let y_[j] := y[j];
+		}
+		unfix {i in I} y[i];
+		for{i in I}{
+			let y_[i] := sum{l in K} y[l]*T[l,i];
+			let y[i] := y_[i];
+		}
+		
+		# fix y_opt_TD and use kkt.mod (with x_ unfixed) to find x_opt_TD
+		fix {i in I} y[i];
+		drop {j in J} constraints_D[j];
+		unfix {j in J} x_[j];
+		restore complementary_slackness_primal;
+		restore complementary_slackness_dual;
+		restore {i in I} feasibility_primal[i]; 
+		
+		solve;
+		display solve_result;
+		
+		for{j in J}{
+			if solve_result <> "unbounded"  and solve_result_TD_1 <> 1 then {
+				if solve_result <> "infeasible" and solve_result_TD_1 <> -1 then {
+					let x_opt_TD[j] := x_[j];
+				}
+				else let x_opt_TD[j] := -1;
+			}
+		}
+		
+		display x_opt_P, x_opt_TP, x_opt_TD;
+		
+		reset data n,m,k,I,J,K,c,A,b,T,G;
+		
+		
+		## calculating feasibility errors with respect to P
+		
+		data ("Inst_" & dim & "_" & instance & ".dat");
+		
+		for{i in I}{
+			let aux := sum{j in J} A[i,j]*x_opt_P[j] - b[i];
+			let error_P := if aux < Infinity and aux > -Infinity and error_P < Infinity and error_P > -Infinity then error_P + (aux)^2 else Infinity;
+			
+			let aux := sum{j in J} A[i,j]*x_opt_TP[j] - b[i];
+			let error_TP := if aux < Infinity and aux > -Infinity and error_TP < Infinity and error_TP > -Infinity then error_TP + (aux)^2 else Infinity;
+			
+			let aux := sum{j in J} A[i,j]*x_opt_TD[j] - b[i];
+			let error_TD := if aux < Infinity and aux > -Infinity and error_TD < Infinity and error_TD > -Infinity then error_TD + (aux)^2 else Infinity;
+		}
+		
+		display error_P,error_TP,error_TD;
+		
+		reset data n,m,k,I,J,K,c,A,b,T,G;
+	}
+}

@@ -1,0 +1,9 @@
+## solving P problem : min{c*x | A*x = b AND x >= 0}
+
+model P.mod;
+data "Inst_4_1.dat";
+option solver cplex;
+
+solve;
+display f,x;
+# constraints_P, constraints_P.slack;

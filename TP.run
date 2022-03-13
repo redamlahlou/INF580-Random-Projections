@@ -1,0 +1,9 @@
+## solving TP problem : min{c*x | (T*A)*x = (T*b) AND x >= 0}
+
+model P.mod;
+data "Inst_proj_6_1.dat";
+option solver cplex;
+
+
+solve;
+display f,x;
