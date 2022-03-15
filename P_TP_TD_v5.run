@@ -1,0 +1,300 @@
+## solving many instances and calculating the error
+
+param version := 3; # version of this file
+
+## auxiliary variables to generate random instances of dimensions...
+# ...(n,m,k)=(m/ratio,m,m/ratio*fraction), m in dims, ratio in ratios, fraction in fractions
+
+#set dims := {10,30,90,270,810};        # modulo 3
+set dims := {810,270,90,30,10};
+param max_dim := max{dim in dims} dim;
+set ratios := {1.0,0.8,0.6};  # ratios n/m
+param min_ratio := min{ratio in ratios} ratio;
+set fractions := 0.25 .. 0.05 by -0.5;
+param max_fraction := max{fraction in fractions} fraction;
+
+param N_Inst := 5; # number of instances per dimension
+
+model sets_and_parameters.mod;
+model P_.mod;			# primal model
+model TP_.mod;			# primal projected
+model TD_.mod;			# dual projected odel
+model kkt.mod;			# complementary slackness (as an LP model)
+
+param x_opt_P{J};
+param x_opt_TP{J};
+param x_opt_TD{J};
+param y_{I};			# auxiliary parameter for the values of y in TD model 
+
+param solve_result_P;
+param solve_result_TP;
+param solve_result_TD;  # -1,0,1 : infeasible, feasible and bounded, unbounded
+param solve_result_TDP;
+
+param infeasible_val := -Infinity;   # value assign to calculations if the result is "infeasible"
+param unbounded_val := Infinity;	 # value assign to calculations if the result is "unbounded"
+
+param dist_P_TP;        # (Euclidean) distance between the solutions of P and TP
+param dist_P_TD;		# (Euclidean) distance between the solutions of P and TD
+
+param error_P;          # this error is calculated to verify the consistency of the algorithm
+param error_TP;
+param error_TD;
+param aux default 0; 	# auxiliary parameter for the calculations
+
+param rows;
+param columns;
+param k_;
+
+printf "rows\tcolumns\trows_proj\tinst\tP_status\tTP_status\tTD_status\tTDP_status\tP_feas_error\tTP_feas_error\tTD_feas_error\tP-TP_dist\tP-TD_dist\n" > ("results");
+
+#for{fraction in {0.25}}{
+#for{ratio in {1}}{
+#	for{dim in {10}}{
+#		for{instance in {1}}{
+
+for{fraction in fractions}{
+for{ratio in ratios}{
+	for{dim in dims}{
+		for{instance in 1..N_Inst}{
+			option TMPDIR "D:\AMPL_DIRTEMPS";
+			let columns := dim;
+			let rows := round(dim/ratio,0);
+			#let k_ := round(log(rows)/log(sqrt(2)),0); # lower dimension
+			let k_ := round(rows*fraction,0);
+		
+			printf "%i\t%i\t%i\t%i\t",rows,columns,k_,instance >> ("results");
+			
+			display rows,columns,k_,instance;
+			
+			## solving P problem : min{c*x | A*x = b AND x >= 0}
+			printf "\nsolving P.\n";
+			
+			reset data n,m,k,I,J,K,c,A,A_proj,b,b_proj,T,G,x_opt_P,x_opt_TP,x_opt_TD;
+			data ("Inst_" & rows & "_" & columns & "_" & k_ & "_" & instance & ".dat");
+			data ("Inst_proj_" & rows & "_" & columns & "_" & k_ & "_" & instance & ".dat");
+			
+			## initializing x_opt_P, x_opt_TP and x_opt_TD in case of unboundedness
+			
+			for{j_ in J}{
+				let x_opt_P[j_] := unbounded_val;
+				let x_opt_TP[j_] := unbounded_val;
+				let x_opt_TD[j_] := unbounded_val;
+			}
+			
+			#display J;
+			#display x_opt_P;
+			
+			## initializing error_P, error_TP and error_TP in case of unboundedness
+			let error_P := unbounded_val;
+			let error_TP := unbounded_val;
+			let error_TD := unbounded_val;
+			
+			## initializing distances in case of unboundedness
+			let dist_P_TP := unbounded_val;
+			let dist_P_TD := unbounded_val;
+			
+			option solver cplex;
+			option cplex_options 'bardisplay=1'	'iterations=9223372000000000000';
+		
+			
+			# fixing the variables and constraints of the models D.mod and kkt.mod
+			unfix {j in J} x[j];
+			restore {i in I} constraints_P[i];
+			
+			fix {j in J} x_proj[j];
+			drop {l in K} constraints_TP[l];
+			fix {l in K} y_proj[l];
+			drop {j in J} constraints_TD[j];
+			fix {j in J} x_[j];
+			drop complementary_slackness_primal;
+			drop complementary_slackness_dual;
+			drop {i in I} feasibility_primal[i];
+			
+			# defining the objective function of the model P.mod
+			objective f_P;
+			solve;
+			if solve_result = "unbounded" then {
+				let solve_result_P := 1;
+			}
+			else {
+				if solve_result = "infeasible" then {
+					let solve_result_P := -1;
+				}
+				else let solve_result_P := 0;
+			}
+			printf "%s\t",solve_result >> ("results");
+			
+			
+			for{j in J}{
+				if solve_result <> "unbounded" then { 
+					if solve_result <> "infeasible" then {
+						let x_opt_P[j] := x[j];
+					}
+					else let x_opt_P[j] := infeasible_val;
+				}
+			}
+			
+			#reset data n,m,k,I,J,K,c,A,b,T,G;
+			
+			## solving TP problem : min{c*x | (T*A)*x = (T*b) AND x >= 0}
+			printf "\nsolving TP.\n";
+			
+			#data ("Inst_proj_" & rows & "_" & columns & "_" & k_ & "_" & instance & ".dat");
+			
+			unfix {j in J} x_proj[j];
+			restore {l in K} constraints_TP[l];
+			
+			fix {j in J} x[j];
+			drop {i in I} constraints_P[i];
+			
+			objective f_TP;
+			
+			option solver cplex;
+			option cplex_options 'bardisplay=1'	'iterations=9223372000000000000';
+			solve;
+			if solve_result = "unbounded" then {
+				let solve_result_TP := 1;
+			}
+			else {
+				if solve_result = "infeasible" then {
+					let solve_result_TP := -1;
+				}
+				else let solve_result_TP := 0;
+			}
+			printf "%s\t",solve_result >> ("results");
+			
+			for{j in J}{
+				if solve_result <> "unbounded" then { 
+					if solve_result <> "infeasible" then {
+						let x_opt_TP[j] := x_proj[j];
+					}
+					else let x_opt_TP[j] := -1;
+				}
+			}
+			
+			
+			## solving TD problem. ##
+			printf "\nsolving TD.\n";
+			
+			# fixing the variables and constraints of the models P.mod and 
+			# unfixing those of D.mod
+			unfix {l in K} y_proj[l];
+			restore {j in J} constraints_TD[j];
+			
+			fix {j in J} x_proj[j];
+			drop {l in K} constraints_TP[l];
+			
+			# defining the objective function of the model D.mod
+			objective g_TD;
+			solve;
+
+			printf "%s\t",solve_result >> ("results");
+			if solve_result = "unbounded" then {
+				let solve_result_TD := 1;
+			}
+			else {
+				if solve_result = "infeasible" then {
+					let solve_result_TD := -1;
+				}
+				else let solve_result_TD := 0;
+			}
+			
+			
+			# saving the intermediate results (y from a dual projected model)...
+			# ...in x_opt_TD (k << n,m)
+			
+			for{l in K}{
+				let y_[l] := y_proj[l];
+			}
+
+			unfix {l in K} y_proj[l];
+			
+			for{i in I}{
+				let y_[i] := sum{l in K} y_proj[l]*T[l,i];
+				let y[i] := y_[i];
+			}
+			
+			# fix y_opt_TD and use kkt.mod (with x_ unfixed) to find x_opt_TD
+			unfix {j in J} x_[j];
+			restore complementary_slackness_primal;
+			restore complementary_slackness_dual;
+			restore {i in I} feasibility_primal[i];
+			
+			fix {i in I} y[i];
+			drop {j in J} constraints_TD[j]; 
+			
+			objective constant;
+			solve;
+			if solve_result = "unbounded" then {
+				let solve_result_TDP := 1;
+			}
+			else {
+				if solve_result = "infeasible" then {
+					let solve_result_TDP := -1;
+				}
+				else let solve_result_TDP := 0;
+			}
+			printf "%s\t",solve_result >> ("results");
+			
+			for{j in J}{
+				if solve_result <> "unbounded"  and solve_result_TD <> 1 then {
+					if solve_result <> "infeasible" and solve_result_TD <> -1 then {
+						let x_opt_TD[j] := x_[j];
+					}
+					else let x_opt_TD[j] := infeasible_val;
+				}
+			}
+			
+			#display x_opt_P, x_opt_TP, x_opt_TD;
+			
+			#reset data n,m,k,I,J,K,c,A,b,T,G;
+		
+			
+			## calculating feasibility errors with respect to P
+			
+			#data ("Inst_" & rows & "_" & columns & "_" & k_ & "_" & instance & ".dat");
+			
+			if solve_result_P = -1 then {
+				let error_P := -Infinity;
+			}
+			else {
+				if solve_result_P = 0 then {
+					let error_P := sum{i in I} (sum{j in J} A[i,j]*x_opt_P[j] - b[i])^2;
+				}
+			}
+			
+			if solve_result_TP = -1 then {
+				let error_TP := -Infinity;
+				let dist_P_TP := -Infinity;
+			}
+			else {
+				if solve_result_TP = 0 then {
+					let error_TP := sum{i in I} (sum{j in J} A[i,j]*x_opt_TP[j] - b[i])^2;
+					let dist_P_TP := sum{j in I} (x_opt_P[j] - x_opt_TP[j])^2;
+				}
+			}
+			
+			/*
+			
+			if solve_result_TD = -1 then {
+				let error_TD := -Infinity;
+				let dist_P_TD := -Infinity;
+			}
+			else {
+				if solve_result_TP = 0 then {
+					let error_TD := sum{i in I} (sum{j in J} A[i,j]*x_opt_TD[j] - b[i])^2;
+					let dist_P_TP := sum{j in I} (x_opt_P[j] - x_opt_TD[j])^2;
+				}
+			}
+			
+			*/
+			
+			printf "%.3f\t%.3f%.3f\t%.3f%.3f\n",error_P,error_TP,error_TD,dist_P_TP,dist_P_TD >> ("results");
+			#display error_P,error_TP,error_TD;
+			
+			
+		}
+	}
+}
+}

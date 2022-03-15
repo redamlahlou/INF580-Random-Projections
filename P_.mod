@@ -2,7 +2,7 @@
 
 var x{J} >= 0;
 
-minimize f:
+minimize f_P:
 	sum{j in J} c[j]*x[j];
 	
 subject to constraints_P{i in I}:

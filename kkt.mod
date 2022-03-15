@@ -1,6 +1,9 @@
 ## primal solution from dual solution
 
 var x_{J} >= 0;
+var y{I};
+
+minimize constant:	0;
 
 subject to complementary_slackness_primal:
 	sum{j in J} (sum{i in I} y[i]*A[i,j] - c[j])*x_[j] = 0;
