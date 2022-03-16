@@ -57,7 +57,7 @@ for{fraction in fractions}{
 for{ratio in ratios}{
 	for{dim in dims}{
 		for{instance in 1..N_Inst}{
-			option TMPDIR "D:\AMPL_DIRTEMPS";
+			
 			let columns := dim;
 			let rows := round(dim/ratio,0);
 			#let k_ := round(log(rows)/log(sqrt(2)),0); # lower dimension
