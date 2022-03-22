@@ -1,0 +1,286 @@
+## solving many instances and calculating the error
+
+param version := 3; # version of this file
+
+param dim_I default 1; # This parameter represents card(I)
+param dim_J default 1; # This parameter represents card(J)>card(I)
+
+## auxiliary variables to generate random instances of dimensions...
+# ...(n,m,k)=(m/ratio,m,m/ratio*fraction), m in dims, ratio in ratios, fraction in fractions
+
+#set dims := {10,30,90,270,810};        # modulo 3
+#set dims := {300,600,900,1200,1500,1800,2100,2500,2800,3200};
+set dims := {300,600,900,1200,1500};
+param max_dim := max{dim in dims} dim;
+set ratios := {0.9,0.8,0.7};  # ratios n/m
+param min_ratio := min{ratio in ratios} ratio;
+set fractions := {1/5,1/4,1/3,1/2};  # ratios k/n
+param max_fraction := max{fraction in fractions} fraction;
+
+param N_inst := 5; # number of instances per dimension
+param N_proj := 5; # number of projections over the same instance
+
+model P_TP_TD_v2.mod;      # primal (P), primal projected (TP), dual projected (TD) and KKT 
+
+param x_opt_P{J};
+param x_opt_TP{J};
+param x_opt_TD{J};
+
+# solve_result = -1,0,1 holds for infeasible, feasible and bounded, unbounded
+param solve_result_P;
+param solve_result_TP;
+param solve_result_TD;
+param solve_result_TDP;
+
+param infeasible_val := -Infinity;   # value assign to calculations if the result is "infeasible"
+param unbounded_val := Infinity;	 # value assign to calculations if the result is "unbounded"
+
+param dist_P_TP;        # (Euclidean) distance between the solutions of P and TP
+param dist_P_TD;		# (Euclidean) distance between the solutions of P and TD
+
+param error_P;          # this error is calculated to verify the consistency of the algorithm
+param error_TP;
+param error_TD;
+
+param obj_val_P;
+param obj_val_TP;
+param obj_val_TDP;
+
+param aux default 0; 	# auxiliary parameter for the calculations
+
+param rows;
+param columns;
+param k_;
+
+printf "rows\tcolumns\trows_proj\tinst\tproj\tP_status\tTP_status\tTD_status\tTDP_status\tP_feas_error\tTP_feas_error\tTD_feas_error\tP-TP_dist\tP-TD_dist\tobj_val_P\tobj_val_TP\tobj_val_TDP\n" > ("results");
+
+### generating the random Instances ###
+
+for{dim in dims}{
+	let dim_J := dim; 							# number of columns of A
+	
+	for{ratio in ratios}{
+		let dim_I := round(dim*ratio,0);     	# number of rows of A
+	
+		for{fraction in fractions}{
+			let k_ := round(dim_I*fraction,0);	# number of rows of T
+			
+			for{instance in 1..N_inst}{
+				printf "\nrows: %i\tcolumns: %i\tk: %i\tinstance: %i\t\n",dim_I,dim_J,k_,instance;
+				
+				### solving P problem : min{c*x | A*x = b AND x >= 0} ###
+				printf "\nsolving P.\n";
+				
+				reset data n,m,k,I,J,K,c,A,A_proj,b,b_proj,x_opt_P;
+				data ("Inst_" & dim_I & "_" & dim_J & "_" & k_ & "_" & instance & ".dat");
+				let k := 0;
+				
+				# initializing x_opt_P,error_P and obj_val_P in case of unboundedness
+				for{j_ in J}{
+					let x_opt_P[j_] := unbounded_val;
+				}
+				let error_P := unbounded_val;
+				let obj_val_P := unbounded_val;
+					
+				# defining the objective function and unfixing the constraints of P
+				objective f_P;
+				unfix {j in J} x[j];
+				restore {i in I} constraints_P[i];
+	
+				
+				# fixing the constraints of the other models
+				fix {j in J} x_proj[j];
+				drop {l in K} constraints_TP[l];
+				fix {l in K} y_proj[l];
+				drop {j in J} constraints_TD[j];
+				fix {j in J} s_p_plus[j];
+				fix {j in J} s_p_minus[j];
+				fix {i in I} s_d_plus[i];
+				fix {i in I} s_d_minus[i];
+				drop {j in J} complementary_slackness_primal;
+				drop {i in I} complementary_slackness_dual;
+				
+				# solving P and updating solve_result_P and x_opt_P
+				option solver cplex;
+				solve;
+				
+				let solve_result_P := solve_result_num;
+				for{j in J}{
+					if 300 > solve_result_P or solve_result_P > 399 then { 
+						if 200 > solve_result_P or solve_result_P > 299 then {
+							let x_opt_P[j] := x[j];
+							let obj_val_P := f_P;
+						}
+						else {
+							let x_opt_P[j] := infeasible_val;
+							let obj_val_P := infeasible_val;
+						}
+					}
+				}
+				
+				# calculating faisability error for P (it should be zero)
+				
+				
+				if 200 <= solve_result_P and solve_result_P <= 299 then {
+					let error_P := -Infinity;
+				}
+				else {
+					if 0 <= solve_result_P and solve_result_P <= 99 then {
+						let error_P := sum{i in I} (sum{j in J} A[i,j]*x_opt_P[j] - b[i])^2;
+					}
+				}
+				
+				for{projection in 1..N_proj}{
+				
+					display projection;
+				
+					reset data k,A_proj,b_proj,T,x_opt_TP,x_opt_TD;
+					data ("Inst_proj_" & dim_I & "_" & dim_J & "_" & k_ & "_" & instance & "_" & projection & ".dat");
+					
+					## initializing x_opt_TP and x_opt_TD in case of unboundedness
+					for{j_ in J}{
+						let x_opt_TP[j_] := unbounded_val;
+						let x_opt_TD[j_] := unbounded_val;
+					}
+					
+					## initializing error_TP and error_TP in case of unboundedness
+					let error_TP := unbounded_val;
+					let error_TD := unbounded_val;
+					
+					## initializing obj_val_TP and obj_val_TDP
+					let obj_val_TP := unbounded_val;
+					let obj_val_TDP := unbounded_val;
+					
+					## initializing distances in case of unboundedness
+					let dist_P_TP := unbounded_val;
+					let dist_P_TD := unbounded_val;
+					
+					
+					### solving TP problem : min{c*x | (T*A)*x = (T*b) AND x >= 0} ###
+					
+					printf "\nsolving TP.\n";
+					
+					# defining the objective function and unfixing the constraints of P
+					objective f_TP;
+					unfix {j in J} x_proj[j];
+					restore {l in K} constraints_TP[l];
+					
+					# fixing the constraints of the other models
+					fix {j in J} x[j];
+					drop {i in I} constraints_P[i];
+					
+					# solving TP and updating solve_result_TP and x_opt_TP
+					option solver cplex;
+					solve;
+					
+					let solve_result_TP := solve_result_num;
+					
+					if 300 > solve_result_TP or solve_result_TP > 399 then { 
+						if 200 > solve_result_TP or solve_result_TP > 299 then {
+							for{j in J}{	
+								let x_opt_TP[j] := x_proj[j];
+								let obj_val_TP := f_P;
+							}
+						}
+						else {
+							for{j in J}{
+								let x_opt_TP[j] := infeasible_val;
+								let obj_val_TP := infeasible_val;
+							}
+						}
+					}
+					
+					
+					## solving TD problem. ##
+					printf "\nsolving TD.\n";
+					
+					# defining the objective function and unfixing the constraints of TD
+					objective g_TD;
+					unfix {l in K} y_proj[l];
+					restore {j in J} constraints_TD[j];
+					
+					# fixing the constraints of the other models
+					fix {j in J} x_proj[j];
+					drop {l in K} constraints_TP[l];
+					
+					# solving TD and updating solve_result_TD
+					solve;
+					let solve_result_TD := solve_result_num;
+				
+					
+					## solving TDP problem. ##
+					printf "\nsolving TDP.\n";
+					
+					# defining the objective function and unfixing the constraints of TDP
+					objective f_TDP;
+					unfix {j in J} x[j];
+					unfix {j in J} s_p_plus[j];
+					unfix {j in J} s_p_minus[j];
+					unfix {i in I} s_d_plus[i];
+					unfix {i in I} s_d_minus[i];
+					restore {j in J} complementary_slackness_primal;
+					restore {i in I} complementary_slackness_dual;
+					
+					# assigning y <- y_proj*T and treating it as a parameter in the kkt model
+					unfix {i in I} y[i];
+					for{i in I}{
+						let y[i] := sum{l in K} y_proj[l]*T[l,i];
+					}
+					fix {i in I} y[i];
+					
+					# fixing the constraints of the other models
+					drop {j in J} constraints_TD[j]; 
+					
+					solve;
+					let solve_result_TDP := solve_result_num;
+					
+					for{j in J}{
+						if (300 > solve_result_TDP or solve_result_TDP > 399) and (300 > solve_result_TD or solve_result_TD > 399) then {
+							if (200 > solve_result_TDP or solve_result_TDP > 299) and (200 > solve_result_TD or solve_result_TD > 299) then {
+								let x_opt_TD[j] := x[j];
+								let obj_val_TDP := f_TDP;
+							}
+							else {
+								let x_opt_TD[j] := infeasible_val;
+								let obj_val_TDP := infeasible_val;
+							}
+						}
+					}
+					
+
+					## calculating feasibility errors with respect to P
+									
+					if 200 <= solve_result_TP and solve_result_TP <= 299 then {
+						let error_TP := -Infinity;
+						let dist_P_TP := -Infinity;
+					}
+					else {
+						if 0 <= solve_result_TP and solve_result_TP <= 99 then {
+							let error_TP := sum{i in I} (sum{j in J} A[i,j]*x_opt_TP[j] - b[i])^2;
+							let dist_P_TP := sum{j in I} (x_opt_P[j] - x_opt_TP[j])^2;
+						}
+					}
+
+					
+					if 200 <= solve_result_TD and solve_result_TD <= 299 then {
+						let error_TD := -Infinity;
+						let dist_P_TD := -Infinity;
+					}
+					else {
+						if 0 <= solve_result_TD and solve_result_TD <= 99 then {
+							let error_TD := sum{i in I} (sum{j in J} A[i,j]*x_opt_TD[j] - b[i])^2;
+							let dist_P_TD := sum{j in I} (x_opt_P[j] - x_opt_TD[j])^2;
+						}
+					}
+					
+					printf "%i\t%i\t%i\t%i\t",dim_I,dim_J,k_,instance >> ("results");
+					printf "%i\t",projection >> ("results");
+					printf "%s\t%s\t%s\t%s\t",solve_result_P,solve_result_TD,solve_result_TD,solve_result_TDP >> ("results");
+					printf "%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t",error_P,error_TP,error_TD,dist_P_TP,dist_P_TD >> ("results");
+					printf "%.3f\t%.3f\t%.3f\t\n",obj_val_P,obj_val_TP,obj_val_TDP>> ("results");
+			
+				}
+		}
+	}
+}
+}
